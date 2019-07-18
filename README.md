@@ -1,7 +1,7 @@
 # packet2audio
 
 
-A minimal script to hoover up network traffic and spit it out the audio interface.
+A minimal python script to hoover up network traffic and spit it out the audio interface.
 
 ## Compatibility
 
@@ -36,25 +36,56 @@ $ packet2audio -i <iface_name>
 
 ## Usage
 
-Simple.
-
-Example usage: 
+Simple, but it must be run as root (with `sudo`):
 
 ```
-packet2audio -i wlan0
+usage: packet2audio [-h] [-a] [-s] -i INTERFACE [-c CHUNK_SIZE]
+                    [-r SAMPLE_RATE] [-w WIDTH] [-t TIMEOUT] [-p]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -a, --audio-blocking  non-blocking by default
+  -s, --socket-blocking
+                        non-blocking by default
+  -i INTERFACE, --interface INTERFACE
+                        [if0[,if1]]
+  -c CHUNK_SIZE, --chunk-size CHUNK_SIZE
+                        chunk size in frames
+  -r SAMPLE_RATE, --sample-rate SAMPLE_RATE
+                        frames per second
+  -w WIDTH, --width WIDTH
+                        bytes per sample
+  -t TIMEOUT, --timeout TIMEOUT
+                        socket timeout in seconds
+  -p, --print-packet    print packet to console
 ```
 
-Can listen on more than one interface: 
+### Examples:
+
+Listen to WiFi traffic: 
 
 ```
-packet2audio -i wlan0,eth0
+sudo packet2audio -i wlan0
+```
+
+Listen on more than one interface: 
+
+```
+sudo packet2audio -i wlan0,eth0
 ```
 
 Enable blocking with `-a` for audio and `-s` for socket:
 
 ```
-packet2audio -i wlan0,eth0 -a -s
+sudo packet2audio -i wlan0,eth0 -a -s
 ```
+
+Print the data written to the audio buffer with `-p` (hint: doesn't make sense to use without a monitor):
+
+```
+sudo packet2audio -i wlan0 -p
+```
+
 ## Credits
 
 by Phillip David Stearns 2019
