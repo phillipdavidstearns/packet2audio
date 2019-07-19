@@ -42,7 +42,7 @@ import select
 ap = argparse.ArgumentParser()
 ap.add_argument("-a", "--audio-blocking", action='store_true', default=False, required=False, help="non-blocking by default")
 ap.add_argument("-s", "--socket-blocking", action='store_true', default=False, required=False, help="non-blocking by default")
-ap.add_argument("-i", "--interface", required=True, help="[if0[,if1]]")
+ap.add_argument("-i", "--interface", required=True, help="[if0[,if1]] also accepts delims ':' '-' '_' '.' ")
 ap.add_argument("-c", "--chunk-size", type=int, default=2048, required=False, help="chunk size in frames")
 ap.add_argument("-r", "--sample-rate", type=int, default=44100, required=False, help="frames per second")
 ap.add_argument("-w", "--width", type=int, default=1, required=False, help="bytes per sample")
@@ -58,7 +58,7 @@ if os.getuid() != 0:
 interfaces = []
 packets = []
 
-ifs = args.interface.split(",")
+ifs = args.interface.split(',|:|-|_|.|')
 CHANNELS = len(ifs)
 
 for i in range(len(ifs)) :
@@ -191,8 +191,13 @@ def main():
 	signal(SIGTERM, SIGTERM_handler)
 
 	# initialize pyaudio stream
-	stream = init_pyaudio_stream()
-
+	
+	try:
+		stream = init_pyaudio_stream()
+	except:
+		print("Unable to create audio stream.")
+		sys.exit(1)
+		
 	# start the stream
 	try:
 		print("Starting audio stream...")
