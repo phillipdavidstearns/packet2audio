@@ -180,15 +180,21 @@ def SIGINT_handler(sig, frame):
 	print('\nSIGINT received!')
 	shutdown(PA, sockets)
 
-# catch kill signals from the system
+# catch termination signals from the system
 def SIGTERM_handler(sig, frame):
 	print('\nSIGTERM received!')
+	shutdown(PA, sockets)
+
+# catch kill signals from the system
+def SIGKILL_handler(sig, frame):
+	print('\nSIGKILL received!')
 	shutdown(PA, sockets)
 
 def main():
 	# interrupt and terminate signal handling
 	signal(SIGINT, SIGINT_handler)
 	signal(SIGTERM, SIGTERM_handler)
+	signal(SIGKILL, SIGKILL_handler)
 
 	# initialize pyaudio stream
 	
@@ -197,7 +203,7 @@ def main():
 	except:
 		print("Unable to create audio stream.")
 		sys.exit(1)
-		
+
 	# start the stream
 	try:
 		print("Starting audio stream...")
