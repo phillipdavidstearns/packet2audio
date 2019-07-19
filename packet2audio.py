@@ -38,11 +38,12 @@ import socket
 import pyaudio
 import time
 import select
+import re
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-a", "--audio-blocking", action='store_true', default=False, required=False, help="non-blocking by default")
 ap.add_argument("-s", "--socket-blocking", action='store_true', default=False, required=False, help="non-blocking by default")
-ap.add_argument("-i", "--interface", required=True, help="[if0[,if1]] ")
+ap.add_argument("-i", "--interface", required=True, help="[if0[,if1]]")
 ap.add_argument("-c", "--chunk-size", type=int, default=2048, required=False, help="chunk size in frames")
 ap.add_argument("-r", "--sample-rate", type=int, default=44100, required=False, help="frames per second")
 ap.add_argument("-w", "--width", type=int, default=1, required=False, help="bytes per sample")
@@ -58,7 +59,7 @@ if os.getuid() != 0:
 interfaces = []
 packets = []
 
-ifs = args.interface.split(",")
+ifs = re.split("[;,.\-_\+]", args.interface)
 CHANNELS = len(ifs)
 
 for i in range(len(ifs)) :
@@ -185,16 +186,10 @@ def SIGTERM_handler(sig, frame):
 	print('\nSIGTERM received!')
 	shutdown(PA, sockets)
 
-# catch kill signals from the system
-def SIGKILL_handler(sig, frame):
-	print('\nSIGKILL received!')
-	shutdown(PA, sockets)
-
 def main():
 	# interrupt and terminate signal handling
 	signal(SIGINT, SIGINT_handler)
 	signal(SIGTERM, SIGTERM_handler)
-	signal(SIGKILL, SIGKILL_handler)
 
 	# initialize pyaudio stream
 	
