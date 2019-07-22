@@ -59,7 +59,7 @@ if os.getuid() != 0:
 interfaces = []
 packets = []
 
-ifs = re.split("[;,.\-_\+]", args.interface)
+ifs = re.split("[:;,.\-_\+]", args.interface)
 CHANNELS = len(ifs)
 
 for i in range(len(ifs)) :
