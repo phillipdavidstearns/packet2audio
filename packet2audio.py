@@ -146,14 +146,14 @@ def read_sockets(buffers):
 	if SOCKET_BLOCKING:
 		readable,_,_ = select.select(sockets, [], [], TIMEOUT)
 		for socket in readable:
-			packet, interface = socket.recvfrom(65536)
+			packet, interface = socket.recvfrom(CHUNK*4)
 			for n in range(CHANNELS):
 				if interface[0]==interfaces[n]:
 					packets[n] += packet
 	else:
 		for n in range(len(sockets)):
 			try:
-				packet = sockets[n].recv(65536)
+				packet = sockets[n].recv(CHUNK*4)
 				if packet:
 					buffers[n] += packet
 			except:
