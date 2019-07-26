@@ -143,15 +143,11 @@ def extract_frames(buffers, frames):
 	return chunk
 
 def read_sockets(buffers):
-	data = []
 	if SOCKET_BLOCKING:
 		if len(buffers[0]) < 65536 or len(buffers[1]) < 65536 :
 			readable,_,_ = select.select(sockets, [], [], TIMEOUT)
 			for socket in readable:
-				try:
-					data, interface = socket.recvfrom(65536)
-				except:
-					pass
+				data, interface = socket.recvfrom(65536)
 				if data:
 					for n in range(CHANNELS):
 						if interface[0]==interfaces[n]:
@@ -159,10 +155,7 @@ def read_sockets(buffers):
 	else:
 		for n in range(len(sockets)):
 			if len(buffers[n]) < 65536:
-				try:
-					data = sockets[n].recv(65536)
-				except:
-					pass
+				data = sockets[n].recv(65536)
 				if data:
 					buffers[n] += data
 
