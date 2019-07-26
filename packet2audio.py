@@ -149,9 +149,9 @@ def read_sockets(buffers):
 			try:
 				data, interface = socket.recvfrom(65536)
 				if data:
-				for n in range(CHANNELS):
-					if interface[0]==interfaces[n]:
-						buffers[n] += data
+					for n in range(CHANNELS):
+						if interface[0]==interfaces[n]:
+							buffers[n] += data
 			except:
 				pass
 	else:
