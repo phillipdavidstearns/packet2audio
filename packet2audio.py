@@ -144,20 +144,26 @@ def extract_frames(buffers, frames):
 
 def read_sockets(buffers):
 	if SOCKET_BLOCKING:
-		readable,_,_ = select.select(sockets, [], [], TIMEOUT)
-		for socket in readable:
-			packet, interface = socket.recvfrom(CHUNK*4)
-			for n in range(CHANNELS):
-				if interface[0]==interfaces[n]:
-					packets[n] += packet
+		if len(buffers[0] < 65536) || len(buffers[1] < 65536) :
+			readable,_,_ = select.select(sockets, [], [], TIMEOUT)
+			for socket in readable:
+				try:
+					data, interface = socket.recvfrom(65536)
+				except:
+					pass
+				if data:
+					for n in range(CHANNELS):
+						if interface[0]==interfaces[n]:
+							buffers[n] += data
 	else:
-		for n in range(len(sockets)):
-			try:
-				packet = sockets[n].recv(CHUNK*4)
-				if packet:
-					buffers[n] += packet
-			except:
-				pass
+		if len(buffers[n] < 65536):
+			for n in range(len(sockets)):
+				try:
+					data = sockets[n].recv(65536)
+				except:
+					pass
+				if data:
+					buffers[n] += data
 
 def shutdown(PyAudio, socket_list):
 	# bring down the pyaudio stream
