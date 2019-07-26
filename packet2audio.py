@@ -156,8 +156,8 @@ def read_sockets(buffers):
 						if interface[0]==interfaces[n]:
 							buffers[n] += data
 	else:
-		if len(buffers[n]) < 65536:
-			for n in range(len(sockets)):
+		for n in range(len(sockets)):
+			if len(buffers[n]) < 65536:
 				try:
 					data = sockets[n].recv(65536)
 				except:
