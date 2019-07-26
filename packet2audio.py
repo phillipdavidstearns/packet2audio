@@ -143,6 +143,7 @@ def extract_frames(buffers, frames):
 	return chunk
 
 def read_sockets(buffers):
+	data = []
 	if SOCKET_BLOCKING:
 		if len(buffers[0]) < 65536 or len(buffers[1]) < 65536 :
 			readable,_,_ = select.select(sockets, [], [], TIMEOUT)
