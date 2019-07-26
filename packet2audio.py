@@ -146,17 +146,23 @@ def read_sockets(buffers):
 	if SOCKET_BLOCKING:
 		readable,_,_ = select.select(sockets, [], [], TIMEOUT)
 		for socket in readable:
-			data, interface = socket.recvfrom(65536)
-			if data:
+			try:
+				data, interface = socket.recvfrom(65536)
+				if data:
 				for n in range(CHANNELS):
 					if interface[0]==interfaces[n]:
 						buffers[n] += data
+			except:
+				pass
 	else:
-		for n in range(CHANNELS):
+		for n in range(len(sockets)):
 			if len(buffers[n]) < 65536:
-				data = sockets[n].recv(65536)
-				if data:
-					buffers[n] += data
+				try:
+					data = sockets[n].recv(65536)
+					if data:
+						buffers[n] += data
+				except:
+					pass
 
 def shutdown(PyAudio, socket_list):
 	# bring down the pyaudio stream
