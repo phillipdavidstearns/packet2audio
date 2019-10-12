@@ -197,7 +197,6 @@ def main():
 	signal(SIGTERM, SIGTERM_handler)
 
 	# initialize pyaudio stream
-	
 	try:
 		stream = init_pyaudio_stream()
 	except:
@@ -223,4 +222,3 @@ def main():
 
 if __name__ == "__main__":
 	main()
-	
