@@ -15,7 +15,7 @@ Requirements: pyaudio
 
 install pyaudio on Debian systems using:
 
-$ sudo apt-get update && sudo apt-get install python3-pyaudio
+$ sudo apt-get update && sudo apt-get install python3-pyaudio -y
 
 by Phillip David Stearns 2019
 
