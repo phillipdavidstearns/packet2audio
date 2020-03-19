@@ -1,0 +1,14 @@
+[Unit]
+Description=packet2audio for %I
+After=network.target rc.local.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/bin/packet2audio -i %I
+Restart=on-success
+RestartPreventExitStatus=SIGTERM SIGKILL
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
