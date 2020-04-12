@@ -110,6 +110,7 @@ def init_pyaudio_stream(PyAudio=PA, width=WIDTH, channels=CHANNELS, rate=RATE, f
 				    rate=rate,
 				    frames_per_buffer=frames_per_buffer,
 				    input=input,
+				    output_device_index=0,
 				    output=output)
 	else:
 		return PyAudio.open(format=pyaudio.get_format_from_width(width),
@@ -117,6 +118,7 @@ def init_pyaudio_stream(PyAudio=PA, width=WIDTH, channels=CHANNELS, rate=RATE, f
 		 		    rate=rate,
 		 		    frames_per_buffer=frames_per_buffer,
 		 		    input=input,
+		 		    output_device_index=0,
 		 		    output=output,
 				    stream_callback=audify_data_callback)
 
