@@ -39,6 +39,7 @@ import pyaudio
 import time
 import select
 import re
+import asyncio
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-a", "--audio-blocking", action='store_true', default=False, required=False, help="non-blocking by default")
@@ -59,7 +60,7 @@ if os.getuid() != 0:
 interfaces = []
 packets = []
 
-ifs = re.split("[:;,.\-_\+]", args.interface)
+ifs = re.split(r'[:;,\.\-_\+|]', args.interface)
 CHANNELS = len(ifs)
 
 for i in range(len(ifs)) :
@@ -129,22 +130,28 @@ def audify_data(buffers, pa_stream):
 	pa_stream.write(bytes(extract_frames(buffers, pa_stream.get_write_available())))
 
 # does what it says on the tin
-def extract_frames(buffers, frames):
+async def extract_frames(buffers, frames):
 	chunk = bytearray()
+	string = ""
 	# assemble frames into chunk
 	for i in range(frames):
 		for n in range(CHANNELS):
 			try:
 				frame = buffers[n][i]
-				if PRINT: print(chr(frame),end='')
 			except:
 				frame = 127
 			chunk.append(frame)
+			try:
+				char=frame.decode('utf-8')
+			except:
+				char=" "
+			string+=char
 	for n in range(CHANNELS):
 		buffers[n] = buffers[n][frames:]
+	if PRINT: print(string)
 	return chunk
 
-def read_sockets(buffers):
+async def read_sockets(buffers):
 	if SOCKET_BLOCKING:
 		readable,_,_ = select.select(sockets, [], [], TIMEOUT)
 		for socket in readable:
@@ -193,7 +200,7 @@ def SIGTERM_handler(sig, frame):
 	print('\nSIGTERM received!')
 	shutdown(PA, sockets)
 
-def main():
+async def main():
 	# interrupt and terminate signal handling
 	signal(SIGINT, SIGINT_handler)
 	signal(SIGTERM, SIGTERM_handler)
@@ -218,9 +225,14 @@ def main():
 
 	while True:
 		#give the processor a rest
-		time.sleep(1/CHUNK)
-		read_sockets(packets)
-		if AUDIO_BLOCKING: audify_data(packets, stream)
+		asyncio.sleep(1/CHUNK)
+		await read_sockets(packets)
+		# if AUDIO_BLOCKING: audify_data(packets, stream)
 
 if __name__ == "__main__":
-	main()
+	try:
+		asycio.run(main())
+	except Exception as e:
+		print('Ooops! Exception caught:',e)
+	finally:
+		asycio
