@@ -6,16 +6,22 @@ packet2audio
 example usage: ./packet2audio.py -i wlan0
 
 A minimal script to hoover up network traffic and spit it out the audio interface.
+Non-blocking by design. Why would you ever want any of these things to block? LMK!
 Tested and working on Raspberry Pi v3 B+ (Raspbian Stretch), Debian 9.9, Kali Linux
 Might work on Debian VMs (untested)
 Compatible with python3
 Not compatible with MacOSX (tested).
 Windows compatibility not tested.
-Requirements: pyaudio
+Requirements: pyaudio, asyncio
 
 install pyaudio on Debian systems using:
 
 $ sudo apt-get update && sudo apt-get install python3-pyaudio -y
+
+install asyncio on Debian systems using:
+
+$ sudo apt-get install python3-pip
+$ pip3 install asyncio
 
 by Phillip David Stearns 2019
 
@@ -36,101 +42,39 @@ import argparse
 from signal import *
 import socket
 import pyaudio
-import time
-import select
 import re
 import asyncio
 
-ap = argparse.ArgumentParser()
-ap.add_argument("-a", "--audio-blocking", action='store_true', default=False, required=False, help="non-blocking by default")
-ap.add_argument("-s", "--socket-blocking", action='store_true', default=False, required=False, help="non-blocking by default")
-ap.add_argument("-i", "--interface", required=True, help="[if0[,if1]]")
-ap.add_argument("-c", "--chunk-size", type=int, default=2048, required=False, help="chunk size in frames")
-ap.add_argument("-r", "--sample-rate", type=int, default=44100, required=False, help="frames per second")
-ap.add_argument("-w", "--width", type=int, default=1, required=False, help="bytes per sample")
-ap.add_argument("-t", "--timeout", type=float, default=0.0, required=False, help="socket timeout in seconds")
-ap.add_argument("-p", "--print-packet", action='store_true', default=False, required=False, help="print packet to console")
-args = ap.parse_args()
-
-# check to see if user is root
-if os.getuid() != 0:
-	print("Must be run as root!")
-	exit(1)
-
-interfaces = []
-packets = []
-
-ifs = re.split(r'[:;,\.\-_\+|]', args.interface)
-CHANNELS = len(ifs)
-
-for i in range(len(ifs)) :
-	interfaces.append(ifs[i])
-	packets.append(bytearray())
-
-AUDIO_BLOCKING = args.audio_blocking
-SOCKET_BLOCKING = args.socket_blocking
-CHUNK = args.chunk_size
-RATE = args.sample_rate
-WIDTH = args.width
-if args.timeout > 0.0:
-	TIMEOUT = args.timeout
-else:
-	TIMEOUT = 1 / CHUNK
-PRINT = args.print_packet
-
-print("AUDIO_BLOCKING: " + str(AUDIO_BLOCKING))
-print("SOCKET_BLOCKING: " + str(SOCKET_BLOCKING))
-print("INTERFACES: ", end=' ')
-print(interfaces)
-print("CHANNELS: " + str(CHANNELS))
-print("CHUNK SIZE: " + str(CHUNK))
-print("SAMPLE RATE: " + str(RATE))
-print("BYTES PER SAMPLE: " + str(WIDTH))
-print("SOCKET TIMEOUT: " + str(TIMEOUT))
-
-PA = pyaudio.PyAudio()
-
 # create sockets
-sockets = []
-
-for n in range(CHANNELS):
-	s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
-	try:
-		s.bind((interfaces[n], 0))
-	except:
-		print("Failed to bind to interface: " + interfaces[n])
-		sys.exit(1)
-	s.setblocking(SOCKET_BLOCKING)
-	sockets.append(s)
+def create_sockets(interfaces):
+	sockets = []
+	for n in range(CHANNELS):
+		s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
+		try:
+			s.bind((interfaces[n], 0))
+		except:
+			print("Failed to bind to interface: " + interfaces[n])
+			sys.exit(1)
+		s.setblocking(False)
+		sockets.append(s)
+	return sockets
 
 # create pyaudio stream(s)
-def init_pyaudio_stream(PyAudio=PA, width=WIDTH, channels=CHANNELS, rate=RATE, frames_per_buffer=CHUNK, input=False, output=True, blocking=AUDIO_BLOCKING):
-	if blocking:
-		return PyAudio.open(format=pyaudio.get_format_from_width(width),
-				    channels=channels,
-				    rate=rate,
-				    frames_per_buffer=frames_per_buffer,
-				    input=input,
-				    output_device_index=0,
-				    output=output)
-	else:
-		return PyAudio.open(format=pyaudio.get_format_from_width(width),
-				    channels=channels,
-		 		    rate=rate,
-		 		    frames_per_buffer=frames_per_buffer,
-		 		    input=input,
-		 		    output_device_index=0,
-		 		    output=output,
-				    stream_callback=audify_data_callback)
+def init_pyaudio_stream(PyAudio, width, channels, rate, frames_per_buffer):
+	return PyAudio.open(format=pyaudio.get_format_from_width(width),
+			    channels=channels,
+	 		    rate=rate,
+	 		    frames_per_buffer=frames_per_buffer,
+	 		    input=False,
+	 		    output_device_index=0,
+	 		    output=True,
+			    stream_callback=audify_data_callback)
 
 def audify_data_callback(in_data, frame_count, time_info, status):
 	return(bytes(extract_frames(packets, frame_count)), pyaudio.paContinue)
 
-def audify_data(buffers, pa_stream):
-	pa_stream.write(bytes(extract_frames(buffers, pa_stream.get_write_available())))
-
 # does what it says on the tin
-async def extract_frames(buffers, frames):
+def extract_frames(buffers, frames):
 	chunk = bytearray()
 	string = ""
 	# assemble frames into chunk
@@ -141,39 +85,35 @@ async def extract_frames(buffers, frames):
 			except:
 				frame = 127
 			chunk.append(frame)
-			try:
-				char=frame.decode('utf-8')
-			except:
-				char=" "
-			string+=char
+			if PRINT:
+				try:
+					char=chr(frame)
+				except:
+					char=''
+				if COLOR:
+					color = (int(frame)+SHIFT+256)%256
+					string += '\x1b[48;5;%sm%s' % (color, char)
+				else:
+					string += char
 	for n in range(CHANNELS):
 		buffers[n] = buffers[n][frames:]
-	if PRINT: print(string)
+	if PRINT: 
+		if COLOR: string+'\x1b[0m'
+		print(string, end='')
 	return chunk
 
 async def read_sockets(buffers):
-	if SOCKET_BLOCKING:
-		readable,_,_ = select.select(sockets, [], [], TIMEOUT)
-		for socket in readable:
-			try:
-				data, interface = socket.recvfrom(65536)
-				if data:
-					for n in range(CHANNELS):
-						if interface[0]==interfaces[n]:
-							buffers[n] += data
-			except:
-				pass
-	else:
-		for n in range(len(sockets)):
-			if len(buffers[n]) < 65536:
-				try:
-					data = sockets[n].recv(65536)
-					if data:
-						buffers[n] += data
-				except:
-					pass
+	for n in range(len(sockets)):
+		# if len(buffers[n]) < 65536: # had this here in case they got too big?
+		try:
+			data = await asyncio.get_running_loop().run_in_executor(None, lambda: sockets[n].recv(65536))
+			buffers[n] += data
+		except Exception as e:
+			pass
 
 def shutdown(PyAudio, socket_list):
+	if PRINT and COLOR:
+		print('\x1b[0m',end='')
 	# bring down the pyaudio stream
 	print('Stopping audio stream...')
 	try:
@@ -187,16 +127,26 @@ def shutdown(PyAudio, socket_list):
 			socket_list[n].close()
 		except:
 			print("Error closing socket.")
+	try:
+		print('Shutting down asyncio event loop.')
+		asyncio.get_running_loop().stop()
+	except:
+		print("Couldn't stop asyncio event loop.")
+
 	print('Peace out!')
 	sys.exit(0)
 
 # catch control+c
 def SIGINT_handler(sig, frame):
+	if PRINT and COLOR:
+		print('\x1b[0m',end='')
 	print('\nSIGINT received!')
 	shutdown(PA, sockets)
 
 # catch termination signals from the system
 def SIGTERM_handler(sig, frame):
+	if PRINT and COLOR:
+		print('\x1b[0m',end='')
 	print('\nSIGTERM received!')
 	shutdown(PA, sockets)
 
@@ -205,34 +155,78 @@ async def main():
 	signal(SIGINT, SIGINT_handler)
 	signal(SIGTERM, SIGTERM_handler)
 
-	# initialize pyaudio stream
-	try:
-		stream = init_pyaudio_stream()
-	except:
-		print("Unable to create audio stream.")
-		sys.exit(1)
-
-	# start the stream
-	try:
-		print("Starting audio stream...")
-		stream.start_stream()
-		if stream.is_active():
-			print("Audio stream is active.")
-	except:
-		print("Unable to start audio stream.")
-
 	print("Sniffing packets...")
-
 	while True:
-		#give the processor a rest
-		asyncio.sleep(1/CHUNK)
+		await asyncio.sleep(2/CHUNK)
 		await read_sockets(packets)
-		# if AUDIO_BLOCKING: audify_data(packets, stream)
 
 if __name__ == "__main__":
 	try:
-		asycio.run(main())
+		ap = argparse.ArgumentParser()
+		ap.add_argument("-i", "--interface", required=True, help="[if0[,if1]]")
+		ap.add_argument("-c", "--chunk-size", type=int, default=4096, required=False, help="chunk size in frames")
+		ap.add_argument("-r", "--sample-rate", type=int, default=44100, required=False, help="frames per second")
+		ap.add_argument("-w", "--width", type=int, default=1, required=False, help="bytes per sample")
+		ap.add_argument("-p", "--print-packet", action='store_true', default=False, required=False, help="print packet to console")
+		ap.add_argument("-C", "--print-color", action='store_true', default=False, required=False, help="colorize console output")
+		ap.add_argument("-s", "--color-shift", type=int, default=-127, required=False, help="color shift for colorized printing")
+		
+		args = ap.parse_args()
+
+		# check to see if user is root
+		if os.getuid() != 0:
+			print("Must be run as root!")
+			exit(1)
+
+		interfaces = []
+		packets = []
+
+		ifs = re.split(r'[:;,\.\-_\+|]', args.interface)
+		CHANNELS = len(ifs)
+
+		for i in range(len(ifs)) :
+			interfaces.append(ifs[i])
+			packets.append(bytearray())
+
+		CHUNK = args.chunk_size
+		RATE = args.sample_rate
+		WIDTH = args.width
+		PRINT = args.print_packet
+		COLOR = args.print_color
+		SHIFT =  min(256,max(-256,args.color_shift))
+
+		print("INTERFACES: ", end=' ')
+		print(interfaces)
+		print("CHANNELS: " + str(CHANNELS))
+		print("CHUNK SIZE: " + str(CHUNK))
+		print("SAMPLE RATE: " + str(RATE))
+		print("BYTES PER SAMPLE: " + str(WIDTH))
+
+		try:
+			sockets = create_sockets(interfaces)
+		except:
+			print("Unable to create sockets.")
+			sys.exit(1)
+
+		# initialize pyaudio stream
+		try:
+			PA = pyaudio.PyAudio()
+			stream = init_pyaudio_stream(PA,WIDTH,CHANNELS,RATE,CHUNK)
+		except:
+			print("Unable to create audio stream.")
+			sys.exit(1)
+
+		# start the stream
+		try:
+			print("Starting audio stream...")
+			stream.start_stream()
+			if stream.is_active():
+				print("Audio stream is active.")
+		except:
+			print("Unable to start audio stream.")
+
+		# run the main loop
+		asyncio.run(main())
+
 	except Exception as e:
 		print('Ooops! Exception caught:',e)
-	finally:
-		asycio
