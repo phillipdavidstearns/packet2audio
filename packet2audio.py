@@ -10,7 +10,7 @@ Non-blocking by design. Why would you ever want any of these things to block? LM
 Tested and working on Raspberry Pi v3 B+ (Raspbian Stretch), Debian 9.9, Kali Linux
 Might work on Debian VMs (untested)
 Compatible with python3
-Not compatible with MacOSX (tested).
+Not compatible with MacOSX (tested).x
 Windows compatibility not tested.
 Requirements: pyaudio, asyncio
 
@@ -60,13 +60,13 @@ def create_sockets(interfaces):
 	return sockets
 
 # create pyaudio stream(s)
-def init_pyaudio_stream(PyAudio, width, channels, rate, frames_per_buffer):
-	return PyAudio.open(format=pyaudio.get_format_from_width(width),
-			    channels=channels,
-	 		    rate=rate,
-	 		    frames_per_buffer=frames_per_buffer,
+def init_pyaudio_stream():
+	return PA.open(format=PA.get_format_from_width(WIDTH),
+			    channels=CHANNELS,
+	 		    rate=RATE,
+	 		    frames_per_buffer=CHUNK,
 	 		    input=False,
-	 		    output_device_index=0,
+	 		    output_device_index=DEVICE,
 	 		    output=True,
 			    stream_callback=audify_data_callback)
 
@@ -76,7 +76,6 @@ def audify_data_callback(in_data, frame_count, time_info, status):
 # does what it says on the tin
 def extract_frames(buffers, frames):
 	chunk = bytearray()
-	string = ""
 	# assemble frames into chunk
 	for i in range(frames):
 		for n in range(CHANNELS):
@@ -84,52 +83,70 @@ def extract_frames(buffers, frames):
 				frame = buffers[n][i]
 			except:
 				frame = 127
-			chunk.append(frame)
-			if PRINT:
-				try:
-					char=chr(frame)
-				except:
-					char=''
-				if COLOR:
-					color = (int(frame)+SHIFT+256)%256
-					string += '\x1b[48;5;%sm%s' % (color, char)
-				else:
-					string += char
+			finally:
+				chunk.append(frame)
 	for n in range(CHANNELS):
 		buffers[n] = buffers[n][frames:]
-	if PRINT: 
-		if COLOR: string+'\x1b[0m'
-		print(string, end='')
 	return chunk
 
-async def read_sockets(buffers):
-	for n in range(len(sockets)):
-		# if len(buffers[n]) < 65536: # had this here in case they got too big?
-		try:
-			data = await asyncio.get_running_loop().run_in_executor(None, lambda: sockets[n].recv(65536))
-			buffers[n] += data
-		except Exception as e:
-			pass
+async def printChunks(chunks):
+	for buffer in chunks:
+		string = ''
+		for val in buffer:
+			char=chr(0)
+			if CONTROL_CHARACTERS:
+				TEST = val != 127
+			else:
+				TEST = val > 31 and val != 127
 
-def shutdown(PyAudio, socket_list):
+			if TEST:
+				try:
+					char = chr(val)
+				except:
+					pass
+			if char and COLOR:
+				color = (val+SHIFT+256)%256
+				string += '\x1b[48;5;%sm%s' % (color, char)
+			else:
+				print(char,end='')
+		if COLOR:
+			string+'\x1b[0m'
+			print(string, end='')
+
+async def read_sockets(buffers):
+	chunks = []
+	for n in range(CHANNELS):
+		chunks.append(bytearray())
+		if len(buffers[n]) < 65536: # had this here in case they got too big?
+			try:
+				data = await LOOP.run_in_executor(None, SOCKETS[n].recv, 65536)
+				if data:
+					buffers[n] += data
+					chunks[n] += data
+			except Exception as e:
+				pass
+	return chunks
+
+def shutdown():
 	if PRINT and COLOR:
 		print('\x1b[0m',end='')
 	# bring down the pyaudio stream
 	print('Stopping audio stream...')
 	try:
-		PyAudio.terminate()
+		PA.terminate()
 	except:
 		print("Failed to terminate PyAudio instance.")
 	# close the sockets
-	for n in range(len(socket_list)):
+	for n in range(len(SOCKETS)):
 		print('Closing socket '+str(interfaces[n])+'...')
 		try:
-			socket_list[n].close()
+			SOCKETS[n].close()
 		except:
 			print("Error closing socket.")
 	try:
 		print('Shutting down asyncio event loop.')
-		asyncio.get_running_loop().stop()
+		LOOP.stop()
+		LOOP.close()
 	except:
 		print("Couldn't stop asyncio event loop.")
 
@@ -141,36 +158,70 @@ def SIGINT_handler(sig, frame):
 	if PRINT and COLOR:
 		print('\x1b[0m',end='')
 	print('\nSIGINT received!')
-	shutdown(PA, sockets)
+	shutdown()
 
 # catch termination signals from the system
 def SIGTERM_handler(sig, frame):
 	if PRINT and COLOR:
 		print('\x1b[0m',end='')
 	print('\nSIGTERM received!')
-	shutdown(PA, sockets)
+	shutdown()
 
 async def main():
+	global SOCKETS
+	global PA
+	global packets
 	# interrupt and terminate signal handling
 	signal(SIGINT, SIGINT_handler)
 	signal(SIGTERM, SIGTERM_handler)
 
+	try:
+		SOCKETS = create_sockets(interfaces)
+	except:
+		print("Unable to create sockets.")
+		sys.exit(1)
+
+	# initialize pyaudio stream
+	try:
+		PA = pyaudio.PyAudio()
+		stream = init_pyaudio_stream()
+	except:
+		print("Unable to create audio stream.")
+		sys.exit(1)
+
+	# start the stream
+	try:
+		print("Starting audio stream...")
+		stream.start_stream()
+		if stream.is_active():
+			print("Audio stream is active.")
+	except:
+		print("Unable to start audio stream.")
+
+
 	print("Sniffing packets...")
 	while True:
-		await asyncio.sleep(2/CHUNK)
-		await read_sockets(packets)
+		chunks = await read_sockets(packets)
+		if PRINT:
+			try:
+				await printChunks(chunks)
+			except Exception as e:
+				print('[!] BOOM!',e)
+
 
 if __name__ == "__main__":
 	try:
 		ap = argparse.ArgumentParser()
-		ap.add_argument("-i", "--interface", required=True, help="[if0[,if1]]")
-		ap.add_argument("-c", "--chunk-size", type=int, default=4096, required=False, help="chunk size in frames")
+		ap.add_argument("-i", "--interface", required=True, help="if0[,if1] - must be a valid network interface")
+		ap.add_argument("-c", "--chunk-size", type=int, default=1024, required=False, help="chunk size in frames, or samples")
 		ap.add_argument("-r", "--sample-rate", type=int, default=44100, required=False, help="frames per second")
 		ap.add_argument("-w", "--width", type=int, default=1, required=False, help="bytes per sample")
 		ap.add_argument("-p", "--print-packet", action='store_true', default=False, required=False, help="print packet to console")
 		ap.add_argument("-C", "--print-color", action='store_true', default=False, required=False, help="colorize console output")
+		ap.add_argument("-S", "--print-control-characters", action='store_true', default=False, required=False, help="print utf-8 control characters")
 		ap.add_argument("-s", "--color-shift", type=int, default=-127, required=False, help="color shift for colorized printing")
-		
+		ap.add_argument("-D", "--output-device", type=int, default=0, required=False, help="selects the audio output device (use helper tool for device info).")
+
 		args = ap.parse_args()
 
 		# check to see if user is root
@@ -188,45 +239,28 @@ if __name__ == "__main__":
 			interfaces.append(ifs[i])
 			packets.append(bytearray())
 
+		DEVICE = args.output_device
 		CHUNK = args.chunk_size
 		RATE = args.sample_rate
 		WIDTH = args.width
 		PRINT = args.print_packet
 		COLOR = args.print_color
+		CONTROL_CHARACTERS = args.print_control_characters
 		SHIFT =  min(256,max(-256,args.color_shift))
+		SOCKETS = []
+		PA = None
 
-		print("INTERFACES: ", end=' ')
-		print(interfaces)
-		print("CHANNELS: " + str(CHANNELS))
-		print("CHUNK SIZE: " + str(CHUNK))
-		print("SAMPLE RATE: " + str(RATE))
-		print("BYTES PER SAMPLE: " + str(WIDTH))
+		print("INTERFACES: ", interfaces)
+		print("CHANNELS: ", CHANNELS)
+		print("CHUNK SIZE:", CHUNK)
+		print("SAMPLE RATE:", RATE)
+		print("BYTES PER SAMPLE:", WIDTH)
 
-		try:
-			sockets = create_sockets(interfaces)
-		except:
-			print("Unable to create sockets.")
-			sys.exit(1)
-
-		# initialize pyaudio stream
-		try:
-			PA = pyaudio.PyAudio()
-			stream = init_pyaudio_stream(PA,WIDTH,CHANNELS,RATE,CHUNK)
-		except:
-			print("Unable to create audio stream.")
-			sys.exit(1)
-
-		# start the stream
-		try:
-			print("Starting audio stream...")
-			stream.start_stream()
-			if stream.is_active():
-				print("Audio stream is active.")
-		except:
-			print("Unable to start audio stream.")
-
+		LOOP = asyncio.new_event_loop()
+		asyncio.set_event_loop(LOOP)
 		# run the main loop
-		asyncio.run(main())
+		LOOP.create_task(main())
+		LOOP.run_forever()
 
 	except Exception as e:
 		print('Ooops! Exception caught:',e)
