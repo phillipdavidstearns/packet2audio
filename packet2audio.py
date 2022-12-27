@@ -84,24 +84,18 @@ class Listener(Thread):
 		return buffers
 
 	def extractFrames(self,frames):
-		printQueue = []
-		if PRINT:
-			for n in range(len(self.interfaces)):
-				printQueue.append(bytearray())
-		chunk = bytearray()
-		for i in range(frames):
-			for n in range(len(self.interfaces)):
-				try:
-					frame = self.buffers[n][i]
-				except:
-					frame = 127
-				finally:
-					chunk.append(frame)
-					if PRINT:
-						printQueue[n].append(frame)
-		for n in range(len(self.interfaces)):
+		slices = []
+		for n in range(len(self.buffers)):
+			slices.append(self.buffers[n][:frames])
 			self.buffers[n] = self.buffers[n][frames:]
-		return chunk, printQueue
+			slices[n] += bytes([127]) * (frames - len(slices[n]))
+		if len(self.buffers) == 2 :
+			chunk = [ x for y in zip(slices[0], slices[1]) for x in y ]
+		elif len(self.buffers) == 1:
+			chunk = slices[0]
+		else:
+			raise Exception("[!] Only supports 1 or two channels/interfaces.")
+		return chunk, slices
 
 	def stop(self):
 		print('[LISTENER] stop()')
@@ -161,7 +155,7 @@ class Writer(Thread):
 					val = self.buffers[n][i]
 				except:
 					continue
-				char=chr(0)
+				char=''
 				if CONTROL_CHARACTERS:
 					TEST = val != 127
 				else:
@@ -175,11 +169,11 @@ class Writer(Thread):
 					color = (val+SHIFT+256)%256
 					string += '\x1b[48;5;%sm%s' % (color, char)
 				else:
-					print(char,end=chr(0))
+					print(char,end='')
 					pass
 			if COLOR:
 				string+'\x1b[0m'
-				print(string, end=chr(0))
+				print(string, end='')
 			self.buffers[n]=self.buffers[n][size:]
 
 # create pyaudio stream(s)
