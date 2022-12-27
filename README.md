@@ -1,7 +1,7 @@
 # packet2audio
 
 
-A minimal python script to hoover up network traffic and spit it out the audio interface.
+A minimal python script to hoover up network traffic and spit it out the audio interface. Managing of Sockets, Printing and Audification are handled in separate threads.
 
 ## Compatibility
 
@@ -19,6 +19,10 @@ install pyaudio on Debian systems using:
 
 ```
 $ sudo apt-get update && sudo apt-get install python3-pyaudio portaudio19-dev
+```
+clone the repo:
+
+```
 $ git clone https://github.com/phillipdavidstearns/packet2audio.git
 ```
 
@@ -36,28 +40,10 @@ $ packet2audio -i <iface_name>
 
 ## Usage
 
-Simple, but it must be run as root (with `sudo`):
+Print the helper:
 
 ```
-usage: packet2audio [-h] [-a] [-s] -i INTERFACE [-c CHUNK_SIZE]
-                    [-r SAMPLE_RATE] [-w WIDTH] [-t TIMEOUT] [-p]
-
-optional arguments:
-  -h, --help            show this help message and exit
-  -a, --audio-blocking  non-blocking by default
-  -s, --socket-blocking
-                        non-blocking by default
-  -i INTERFACE, --interface INTERFACE
-                        [if0[,if1]]
-  -c CHUNK_SIZE, --chunk-size CHUNK_SIZE
-                        chunk size in frames
-  -r SAMPLE_RATE, --sample-rate SAMPLE_RATE
-                        frames per second
-  -w WIDTH, --width WIDTH
-                        bytes per sample
-  -t TIMEOUT, --timeout TIMEOUT
-                        socket timeout in seconds
-  -p, --print-packet    print packet to console
+packet2audio -h
 ```
 
 ### Examples:
@@ -74,21 +60,21 @@ Listen on more than one interface:
 sudo packet2audio -i wlan0,eth0
 ```
 
-Enable blocking with `-a` for audio and `-s` for socket:
-
-```
-sudo packet2audio -i wlan0,eth0 -a -s
-```
-
-Print the data written to the audio buffer with `-p` (hint: doesn't make sense to use without a monitor):
+Print to stdout the data written to the audio buffer with `-p` ('utf-8' decoded):
 
 ```
 sudo packet2audio -i wlan0 -p
 ```
 
+Colorize the stdout characters:
+
+```
+sudo packet2audio -i wlan0 -pC
+```
+
 ## Credits
 
-by Phillip David Stearns 2019
+by Phillip David Stearns
 
 Code cobbled together from examples at:
 
