@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
-"""
-
+'''============================================================================
 packet2audio
+by Phillip David Stearns
 
-example usage: ./packet2audio.py -i wlan0
+example usage: sudo python3 packet2audio.py -i wlan0
 
 A minimal script to hoover up network traffic and spit it out the audio interface.
 Non-blocking by design. Why would you ever want any of these things to block? LMK!
+
+After undergoing several overhauls, the current approach taken is to run the three
+diffferent IO tasks in separate threads. When running on a RPi v3 B+, audio
+plays back with minimal cutout. Printing to the console seems to cause interruptions
+and blocking between threads. Still some figuring out to be done here.
+
 Tested and working on Raspberry Pi v3 B+ (Raspbian Stretch), Debian 9.9, Kali Linux
 Might work on Debian VMs (untested)
 Compatible with python3
 Not compatible with MacOSX (tested).x
 Windows compatibility not tested.
-Requirements: pyaudio, asyncio
+
+Requirements: pyaudio
 
 install pyaudio on Debian systems using:
 
 $ sudo apt-get update && sudo apt-get install python3-pyaudio -y
-
-install asyncio on Debian systems using:
-
-$ sudo apt-get install python3-pip
-$ pip3 install asyncio
-
-by Phillip David Stearns 2019
 
 Code cobbled together from examples at:
 
@@ -33,7 +33,7 @@ https://stackoverflow.com/questions/1112343/how-do-i-capture-sigint-in-python#11
 
 A nice link illuminating protocol codes in linux
 https://github.com/torvalds/linux/blob/ead751507de86d90fa250431e9990a8b881f713c/include/uapi/linux/if_ether.h
-"""
+============================================================================='''
 
 # modules
 import os
@@ -43,27 +43,29 @@ from signal import *
 import socket
 import pyaudio
 import re
-import asyncio
 from threading import Thread
-from time import sleep, time
+from time import sleep
+
+#===========================================================================
+# Listener
+# A socket based packet sniffer
 
 class Listener(Thread):
-	def __init__(self, interfaces):
+	def __init__(self, interfaces, chunkSize=4096):
 		self.interfaces = interfaces
+		self.chunkSize = chunkSize
 		self.sockets = self.initSockets()
 		self.buffers = self.initBuffers()
 		self.doRun = False
 		Thread.__init__(self)
 
 	def readSockets(self):
-		for i in range(len(self.interfaces)):
+		for i in range(len(self.sockets)):
 			try:
-				data = self.sockets[i].recv(4096)
-				if data:
-					self.buffers[i] += data
-			except Exception as e:
+				data = self.sockets[i].recv(self.chunkSize)
+				if data: self.buffers[i] += data
+			except:
 				pass
-
 
 	def initSockets(self):
 		sockets = []
@@ -86,9 +88,10 @@ class Listener(Thread):
 	def extractFrames(self,frames):
 		slices = []
 		for n in range(len(self.buffers)):
-			slices.append(self.buffers[n][:frames])
+			slice = self.buffers[n][:frames].copy()
+			slice += bytes([127]) * (frames - len(slice))
+			slices.append(slice)
 			self.buffers[n] = self.buffers[n][frames:]
-			slices[n] += bytes([127]) * (frames - len(slices[n]))
 		if len(self.buffers) == 2 :
 			chunk = [ x for y in zip(slices[0], slices[1]) for x in y ]
 		elif len(self.buffers) == 1:
@@ -108,14 +111,19 @@ class Listener(Thread):
 		print('[LISTENER] run()')
 		self.doRun=True
 		while self.doRun:
+			sleep(0.001)
 			self.readSockets()
 
+#===========================================================================
+# Writer
+# Handles console print operations in an independent thread
+
 class Writer(Thread):
-	def __init__(self, qtyChannels):
+	def __init__(self, qtyChannels, chunkSize=1024):
 		self.qtyChannels = qtyChannels
 		self.doRun = False
 		self.buffers = self.initBuffers()
-		self.chunkSize = 256
+		self.chunkSize = chunkSize
 		Thread.__init__(self)
 
 	def initBuffers(self):
@@ -139,13 +147,12 @@ class Writer(Thread):
 		print('[WRITER] run()')
 		self.doRun=True
 		while self.doRun:
+			sleep(0.01)
 			self.printBuffers()
-
 
 	def printBuffers(self):
 		size=0
 		for n in range(len(self.buffers)):
-			string = ''
 			if self.chunkSize > len(self.buffers[n]):
 				size = len(self.buffers[n])
 			else:
@@ -155,7 +162,7 @@ class Writer(Thread):
 					val = self.buffers[n][i]
 				except:
 					continue
-				char=''
+				char=chr(0)
 				if CONTROL_CHARACTERS:
 					TEST = val != 127
 				else:
@@ -167,63 +174,105 @@ class Writer(Thread):
 						pass
 				if char and COLOR:
 					color = (val+SHIFT+256)%256
-					string += '\x1b[48;5;%sm%s' % (color, char)
+					string = '\x1b[48;5;%sm%s\x1b[0m' % (color, char)
+					print(string, end='')
 				else:
 					print(char,end='')
-					pass
-			if COLOR:
-				string+'\x1b[0m'
-				print(string, end='')
 			self.buffers[n]=self.buffers[n][size:]
 
-# create pyaudio stream(s)
-def init_pyaudio_stream():
-	return PA.open(format=PA.get_format_from_width(WIDTH),
-			    channels=CHANNELS,
-	 		    rate=RATE,
-	 		    frames_per_buffer=CHUNK,
-	 		    input=False,
-	 		    output_device_index=DEVICE,
-	 		    output=True,
-			    stream_callback=audify_data_callback)
+#===========================================================================
+# Audifer
+# Class run in its own thread which handles PyAudio stream instance and operations
+# Callback mode is used. Documentation for PyAudio states the process
+# for playback runs in a separate thread. Initializing in a subclassed Thread may be redundant.
+
+class Audifier(Thread):
+	def __init__(self, qtyChannels, width=1, rate=44100, chunkSize=2048, deviceIndex=0):
+		self.doRun=False
+		self.qtyChannels = qtyChannels
+		self.width = width
+		self.rate = rate
+		self.chunkSize = chunkSize
+		self.deviceIndex = deviceIndex
+		self.pa = pyaudio.PyAudio()
+		self.stream = self.initPyAudioStream()
+		Thread.__init__(self)
+
+	def initPyAudioStream(self):
+		return self.pa.open(format=self.pa.get_format_from_width(self.width),
+			channels=self.qtyChannels,
+	 		rate=self.rate,
+	 		frames_per_buffer=self.chunkSize,
+	 		input=False,
+	 		output_device_index=self.deviceIndex,
+	 		output=True,
+			stream_callback=audify_data_callback)
+
+	def stop(self):
+		print('[AUDIFIER] stop()')
+		self.doRun = False
+		self.pa.terminate()
+		self.join()
+
+	def run(self):
+		print('[AUDIFIER] run()')
+		# start the stream
+		try:
+			print("Starting audio stream...")
+			self.stream.start_stream()
+			if self.stream.is_active():
+				print("Audio stream is active.")
+		except Exception as e:
+			print("Unable to start audio stream.",e)
+
+		while self.doRun:
+			sleep(1)
+
+#===========================================================================
+# callbak for PyAudio stream instance in Audifier
 
 def audify_data_callback(in_data, frame_count, time_info, status):
 	frames, printQueue = sockets.extractFrames(frame_count)
 	if PRINT: writer.queueForPrinting(printQueue)
 	return(bytes(frames), pyaudio.paContinue)
 
+#===========================================================================
+# Signal Handler / shutdown procedure
+
+def signalHandler(signum, frame):
+	if PRINT and COLOR:
+		print('\x1b[0m',end='')
+
+	print('\n[!] Caught termination signal: ', signum)
+
+	# Halt the printing presses
+	if PRINT:
+		print('Stopping Writer...')
+		try:
+			writer.stop()
+		except:
+			print("Error stopping Writer.")
+
+	# Shutdown the PyAudio instance
+	print('Stopping audio stream...')
+	try:
+		audifier.stop()
+	except:
+		print("Failed to terminate PyAudio instance.")
+
+	# close the sockets
+	print('Closing Listener...')
+	try:
+		sockets.stop()
+	except:
+		print("Error closing socket.")
+	print('Peace out!')
+	sys.exit(0)
+
+#===========================================================================
+# main()
+
 def main():
-	def signalHandler(signum, frame):
-			if PRINT and COLOR:
-				print('\x1b[0m',end='')
-
-			print('\n[!] Caught termination signal: ', signum)
-
-			# Halt the printing presses
-			if PRINT:
-				print('Stopping Writer...')
-				try:
-					writer.stop()
-				except:
-					print("Error stopping Writer.")
-
-			# Shutdown the PyAudio instance
-			print('Stopping audio stream...')
-			try:
-				PA.terminate()
-			except:
-				print("Failed to terminate PyAudio instance.")
-			
-			# close the sockets
-			print('Closing Listener...')
-			try:
-				sockets.stop()
-			except:
-				print("Error closing socket.")
-			print('Closing Writer...')
-			
-			print('Peace out!')
-			sys.exit(0)
 
 	# interrupt and terminate signal handling
 	signal(SIGINT, signalHandler)
@@ -233,13 +282,14 @@ def main():
 	while True:
 		sleep(1)
 
-
+#===========================================================================
+# Executed when run as stand alone
 
 if __name__ == "__main__":
 	try:
 		ap = argparse.ArgumentParser()
 		ap.add_argument("-i", "--interface", required=True, help="if0[,if1] - must be a valid network interface")
-		ap.add_argument("-c", "--chunk-size", type=int, default=1024, required=False, help="chunk size in frames, or samples")
+		ap.add_argument("-c", "--chunk-size", type=int, default=2048, required=False, help="chunk size in frames, or samples")
 		ap.add_argument("-r", "--sample-rate", type=int, default=44100, required=False, help="frames per second")
 		ap.add_argument("-w", "--width", type=int, default=1, required=False, help="bytes per sample")
 		ap.add_argument("-p", "--print-packet", action='store_true', default=False, required=False, help="print packet to console")
@@ -256,7 +306,6 @@ if __name__ == "__main__":
 			exit(1)
 
 		interfaces = []
-		# packets = []
 
 		ifs = re.split(r'[:;,\.\-_\+|]', args.interface)
 		CHANNELS = len(ifs)
@@ -272,7 +321,6 @@ if __name__ == "__main__":
 		COLOR = args.print_color
 		CONTROL_CHARACTERS = args.print_control_characters
 		SHIFT =  min(256,max(-256,args.color_shift))
-		PA = None
 
 		print("INTERFACES: ", interfaces)
 		print("CHANNELS: ", CHANNELS)
@@ -294,23 +342,11 @@ if __name__ == "__main__":
 				writer.start()
 			except Exception as e:
 				print(e)
-
 		try:
-			PA = pyaudio.PyAudio()
-			stream = init_pyaudio_stream()
+			audifier = Audifier(CHANNELS, WIDTH, RATE, CHUNK, DEVICE)
+			audifier.start()
 		except Exception as e:
-			print("Unable to create audio stream.",e)
-			sys.exit(1)
-
-		# start the stream
-		try:
-			print("Starting audio stream...")
-			stream.start_stream()
-			if stream.is_active():
-				print("Audio stream is active.")
-		except Exception as e:
-			print("Unable to start audio stream.",e)
-			sys.exit(1)
+			print(e)
 
 		main()
 
