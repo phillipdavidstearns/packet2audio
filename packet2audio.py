@@ -44,20 +44,143 @@ import socket
 import pyaudio
 import re
 import asyncio
+from threading import Thread
+from time import sleep, time
 
-# create sockets
-def create_sockets(interfaces):
-	sockets = []
-	for n in range(CHANNELS):
-		s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
-		try:
-			s.bind((interfaces[n], 0))
-		except:
-			print("Failed to bind to interface: " + interfaces[n])
-			sys.exit(1)
-		s.setblocking(False)
-		sockets.append(s)
-	return sockets
+class Listener(Thread):
+	def __init__(self, interfaces):
+		self.interfaces = interfaces
+		self.sockets = self.initSockets()
+		self.buffers = self.initBuffers()
+		self.doRun = False
+		Thread.__init__(self)
+
+	def readSockets(self):
+		for i in range(len(self.interfaces)):
+			try:
+				data = self.sockets[i].recv(4096)
+				if data:
+					self.buffers[i] += data
+			except Exception as e:
+				pass
+
+
+	def initSockets(self):
+		sockets = []
+		for interface in self.interfaces:
+			s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
+			try:
+				s.bind((interface, 0))
+			except:
+				print("Failed to bind to interface: " + interface)
+			s.setblocking(False)
+			sockets.append(s)
+		return sockets
+
+	def initBuffers(self):
+		buffers = []
+		for interface in self.interfaces :
+			buffers.append(bytearray())
+		return buffers
+
+	def extractFrames(self,frames):
+		printQueue = []
+		if PRINT:
+			for n in range(len(self.interfaces)):
+				printQueue.append(bytearray())
+		chunk = bytearray()
+		for i in range(frames):
+			for n in range(len(self.interfaces)):
+				try:
+					frame = self.buffers[n][i]
+				except:
+					frame = 127
+				finally:
+					chunk.append(frame)
+					if PRINT:
+						printQueue[n].append(frame)
+		for n in range(len(self.interfaces)):
+			self.buffers[n] = self.buffers[n][frames:]
+		return chunk, printQueue
+
+	def stop(self):
+		print('[LISTENER] stop()')
+		self.doRun=False
+		for socket in self.sockets:
+			socket.close()
+		self.join()
+
+	def run(self):
+		print('[LISTENER] run()')
+		self.doRun=True
+		while self.doRun:
+			self.readSockets()
+
+class Writer(Thread):
+	def __init__(self, qtyChannels):
+		self.qtyChannels = qtyChannels
+		self.doRun = False
+		self.buffers = self.initBuffers()
+		self.chunkSize = 256
+		Thread.__init__(self)
+
+	def initBuffers(self):
+		buffers = []
+		for i in range(self.qtyChannels):
+			buffers.append(bytearray())
+		return buffers
+
+	def stop(self):
+		print('[WRITER] stop()')
+		self.doRun=False
+		self.join()
+
+	def queueForPrinting(self, queueData):
+		if len(queueData) != len(self.buffers):
+			raise Exception("[!] len(queueData) != len(self.buffers): ",len(queueData),len(self.buffers))
+		for i in range(len(self.buffers)):
+			self.buffers[i]+=queueData[i]
+
+	def run(self):
+		print('[WRITER] run()')
+		self.doRun=True
+		while self.doRun:
+			self.printBuffers()
+
+
+	def printBuffers(self):
+		size=0
+		for n in range(len(self.buffers)):
+			string = ''
+			if self.chunkSize > len(self.buffers[n]):
+				size = len(self.buffers[n])
+			else:
+				size = self.chunkSize
+			for i in range(size):
+				try:
+					val = self.buffers[n][i]
+				except:
+					continue
+				char=chr(0)
+				if CONTROL_CHARACTERS:
+					TEST = val != 127
+				else:
+					TEST = val > 31 and val != 127
+				if TEST:
+					try:
+						char = chr(val)
+					except:
+						pass
+				if char and COLOR:
+					color = (val+SHIFT+256)%256
+					string += '\x1b[48;5;%sm%s' % (color, char)
+				else:
+					print(char,end=chr(0))
+					pass
+			if COLOR:
+				string+'\x1b[0m'
+				print(string, end=chr(0))
+			self.buffers[n]=self.buffers[n][size:]
 
 # create pyaudio stream(s)
 def init_pyaudio_stream():
@@ -71,142 +194,51 @@ def init_pyaudio_stream():
 			    stream_callback=audify_data_callback)
 
 def audify_data_callback(in_data, frame_count, time_info, status):
-	return(bytes(extract_frames(packets, frame_count)), pyaudio.paContinue)
+	frames, printQueue = sockets.extractFrames(frame_count)
+	if PRINT: writer.queueForPrinting(printQueue)
+	return(bytes(frames), pyaudio.paContinue)
 
-# does what it says on the tin
-def extract_frames(buffers, frames):
-	chunk = bytearray()
-	# assemble frames into chunk
-	for i in range(frames):
-		for n in range(CHANNELS):
-			try:
-				frame = buffers[n][i]
-			except:
-				frame = 127
-			finally:
-				chunk.append(frame)
-	for n in range(CHANNELS):
-		buffers[n] = buffers[n][frames:]
-	return chunk
+def main():
+	def signalHandler(signum, frame):
+			if PRINT and COLOR:
+				print('\x1b[0m',end='')
 
-async def printChunks(chunks):
-	for buffer in chunks:
-		string = ''
-		for val in buffer:
-			char=chr(0)
-			if CONTROL_CHARACTERS:
-				TEST = val != 127
-			else:
-				TEST = val > 31 and val != 127
+			print('\n[!] Caught termination signal: ', signum)
 
-			if TEST:
+			# Halt the printing presses
+			if PRINT:
+				print('Stopping Writer...')
 				try:
-					char = chr(val)
+					writer.stop()
 				except:
-					pass
-			if char and COLOR:
-				color = (val+SHIFT+256)%256
-				string += '\x1b[48;5;%sm%s' % (color, char)
-			else:
-				print(char,end='')
-		if COLOR:
-			string+'\x1b[0m'
-			print(string, end='')
+					print("Error stopping Writer.")
 
-async def read_sockets(buffers):
-	chunks = []
-	for n in range(CHANNELS):
-		chunks.append(bytearray())
-		if len(buffers[n]) < 65536: # had this here in case they got too big?
+			# Shutdown the PyAudio instance
+			print('Stopping audio stream...')
 			try:
-				data = await LOOP.run_in_executor(None, SOCKETS[n].recv, 65536)
-				if data:
-					buffers[n] += data
-					chunks[n] += data
-			except Exception as e:
-				pass
-	return chunks
+				PA.terminate()
+			except:
+				print("Failed to terminate PyAudio instance.")
+			
+			# close the sockets
+			print('Closing Listener...')
+			try:
+				sockets.stop()
+			except:
+				print("Error closing socket.")
+			print('Closing Writer...')
+			
+			print('Peace out!')
+			sys.exit(0)
 
-def shutdown():
-	if PRINT and COLOR:
-		print('\x1b[0m',end='')
-	# bring down the pyaudio stream
-	print('Stopping audio stream...')
-	try:
-		PA.terminate()
-	except:
-		print("Failed to terminate PyAudio instance.")
-	# close the sockets
-	for n in range(len(SOCKETS)):
-		print('Closing socket '+str(interfaces[n])+'...')
-		try:
-			SOCKETS[n].close()
-		except:
-			print("Error closing socket.")
-	try:
-		print('Shutting down asyncio event loop.')
-		LOOP.stop()
-		LOOP.close()
-	except:
-		print("Couldn't stop asyncio event loop.")
-
-	print('Peace out!')
-	sys.exit(0)
-
-# catch control+c
-def SIGINT_handler(sig, frame):
-	if PRINT and COLOR:
-		print('\x1b[0m',end='')
-	print('\nSIGINT received!')
-	shutdown()
-
-# catch termination signals from the system
-def SIGTERM_handler(sig, frame):
-	if PRINT and COLOR:
-		print('\x1b[0m',end='')
-	print('\nSIGTERM received!')
-	shutdown()
-
-async def main():
-	global SOCKETS
-	global PA
-	global packets
 	# interrupt and terminate signal handling
-	signal(SIGINT, SIGINT_handler)
-	signal(SIGTERM, SIGTERM_handler)
+	signal(SIGINT, signalHandler)
+	signal(SIGTERM, signalHandler)
+	signal(SIGHUP, signalHandler)
 
-	try:
-		SOCKETS = create_sockets(interfaces)
-	except:
-		print("Unable to create sockets.")
-		sys.exit(1)
-
-	# initialize pyaudio stream
-	try:
-		PA = pyaudio.PyAudio()
-		stream = init_pyaudio_stream()
-	except:
-		print("Unable to create audio stream.")
-		sys.exit(1)
-
-	# start the stream
-	try:
-		print("Starting audio stream...")
-		stream.start_stream()
-		if stream.is_active():
-			print("Audio stream is active.")
-	except:
-		print("Unable to start audio stream.")
-
-
-	print("Sniffing packets...")
 	while True:
-		chunks = await read_sockets(packets)
-		if PRINT:
-			try:
-				await printChunks(chunks)
-			except Exception as e:
-				print('[!] BOOM!',e)
+		sleep(1)
+
 
 
 if __name__ == "__main__":
@@ -230,14 +262,13 @@ if __name__ == "__main__":
 			exit(1)
 
 		interfaces = []
-		packets = []
+		# packets = []
 
 		ifs = re.split(r'[:;,\.\-_\+|]', args.interface)
 		CHANNELS = len(ifs)
 
 		for i in range(len(ifs)) :
 			interfaces.append(ifs[i])
-			packets.append(bytearray())
 
 		DEVICE = args.output_device
 		CHUNK = args.chunk_size
@@ -247,7 +278,6 @@ if __name__ == "__main__":
 		COLOR = args.print_color
 		CONTROL_CHARACTERS = args.print_control_characters
 		SHIFT =  min(256,max(-256,args.color_shift))
-		SOCKETS = []
 		PA = None
 
 		print("INTERFACES: ", interfaces)
@@ -256,11 +286,39 @@ if __name__ == "__main__":
 		print("SAMPLE RATE:", RATE)
 		print("BYTES PER SAMPLE:", WIDTH)
 
-		LOOP = asyncio.new_event_loop()
-		asyncio.set_event_loop(LOOP)
-		# run the main loop
-		LOOP.create_task(main())
-		LOOP.run_forever()
+		# open the sockets
+		try:
+			sockets = Listener(interfaces)
+			sockets.start()
+		except Exception as e:
+			print(e)
+
+		# fire up the printing presses
+		if PRINT:
+			try:
+				writer = Writer(CHANNELS)
+				writer.start()
+			except Exception as e:
+				print(e)
+
+		try:
+			PA = pyaudio.PyAudio()
+			stream = init_pyaudio_stream()
+		except Exception as e:
+			print("Unable to create audio stream.",e)
+			sys.exit(1)
+
+		# start the stream
+		try:
+			print("Starting audio stream...")
+			stream.start_stream()
+			if stream.is_active():
+				print("Audio stream is active.")
+		except Exception as e:
+			print("Unable to start audio stream.",e)
+			sys.exit(1)
+
+		main()
 
 	except Exception as e:
 		print('Ooops! Exception caught:',e)
