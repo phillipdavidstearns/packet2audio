@@ -87,18 +87,20 @@ class Listener(Thread):
 
 	def extractFrames(self,frames):
 		slices = []
+		printQueue = []
 		for n in range(len(self.buffers)):
-			slice = self.buffers[n][:frames].copy()
-			slice += bytes([127]) * (frames - len(slice))
-			slices.append(slice)
+			slice = self.buffers[n][:frames]
+			printQueue.append(slice)
+			padded = slice + bytes([127]) * (frames - len(slice))
+			slices.append(padded)
 			self.buffers[n] = self.buffers[n][frames:]
 		if len(self.buffers) == 2 :
-			chunk = [ x for y in zip(slices[0], slices[1]) for x in y ]
+			audioChunk = [ x for y in zip(slices[0], slices[1]) for x in y ]
 		elif len(self.buffers) == 1:
-			chunk = slices[0]
+			audioChunk = slices[0]
 		else:
 			raise Exception("[!] Only supports 1 or two channels/interfaces.")
-		return chunk, slices
+		return audioChunk, printQueue
 
 	def stop(self):
 		print('[LISTENER] stop()')
@@ -111,7 +113,7 @@ class Listener(Thread):
 		print('[LISTENER] run()')
 		self.doRun=True
 		while self.doRun:
-			sleep(0.001)
+			sleep(0.0001)
 			self.readSockets()
 
 #===========================================================================
@@ -119,7 +121,7 @@ class Listener(Thread):
 # Handles console print operations in an independent thread
 
 class Writer(Thread):
-	def __init__(self, qtyChannels, chunkSize=1024):
+	def __init__(self, qtyChannels, chunkSize=4096):
 		self.qtyChannels = qtyChannels
 		self.doRun = False
 		self.buffers = self.initBuffers()
@@ -147,12 +149,13 @@ class Writer(Thread):
 		print('[WRITER] run()')
 		self.doRun=True
 		while self.doRun:
-			sleep(0.01)
+			sleep(0.0001)
 			self.printBuffers()
 
 	def printBuffers(self):
-		size=0
+		size = 0
 		for n in range(len(self.buffers)):
+			string = ''
 			if self.chunkSize > len(self.buffers[n]):
 				size = len(self.buffers[n])
 			else:
@@ -172,13 +175,14 @@ class Writer(Thread):
 						char = chr(val)
 					except:
 						pass
-				if char and COLOR:
+				if COLOR:
 					color = (val+SHIFT+256)%256
-					string = '\x1b[48;5;%sm%s\x1b[0m' % (color, char)
-					print(string, end='')
+					string += '\x1b[48;5;%sm%s' % (color, char)
 				else:
-					print(char,end='')
-			self.buffers[n]=self.buffers[n][size:]
+					string+=char
+			if COLOR: string+='\x1b[0m'
+			print(string, end='')
+			self.buffers[n]=self.buffers[n][size:].copy()
 
 #===========================================================================
 # Audifer
@@ -226,7 +230,7 @@ class Audifier(Thread):
 			print("Unable to start audio stream.",e)
 
 		while self.doRun:
-			sleep(1)
+			sleep(0.1)
 
 #===========================================================================
 # callbak for PyAudio stream instance in Audifier
@@ -338,7 +342,7 @@ if __name__ == "__main__":
 		# fire up the printing presses
 		if PRINT:
 			try:
-				writer = Writer(CHANNELS)
+				writer = Writer(CHANNELS, CHUNK*2)
 				writer.start()
 			except Exception as e:
 				print(e)
