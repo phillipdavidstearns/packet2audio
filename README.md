@@ -35,7 +35,7 @@ $ sudo ln -s /path/to/packet2audio/packet2audio.py /usr/local/bin/packet2audio
 Run with:
 
 ```
-$ packet2audio -i <iface_name>
+$ sudo packet2audio -i <iface_name>
 ```
 
 ## Usage

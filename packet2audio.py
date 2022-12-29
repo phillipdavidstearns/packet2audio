@@ -48,66 +48,63 @@ from time import sleep
 
 #===========================================================================
 # Listener
-# A socket based packet sniffer
+# A socket based packet sniffer. Main loop will check sockets for data and grab what's there,
+# storing in a buffer to be extracted later. chunkSize should be a relatively small power of two.
+# Until I can figure out a way to tinker with the sockets and set appropriate permissions, this
+# is what requires running the script as root. 
 
 class Listener(Thread):
 	def __init__(self, interfaces, chunkSize=4096):
 		self.interfaces = interfaces
-		self.chunkSize = chunkSize
+		self.chunkSize = chunkSize # used to fine tune how much is "grabbed" from the socket
 		self.sockets = self.initSockets()
-		self.buffers = self.initBuffers()
-		self.doRun = False
+		self.buffers = self.initBuffers() # data will be into and out of the buffer(s)
+		self.doRun = False # flag to run main loop & help w/ smooth shutdown of thread
 		Thread.__init__(self)
-
-	def readSockets(self):
-		for i in range(len(self.sockets)):
-			try:
-				data = self.sockets[i].recv(self.chunkSize)
-				if data: self.buffers[i] += data
-			except:
-				pass
 
 	def initSockets(self):
 		sockets = []
 		for interface in self.interfaces:
+			# etablishes a RAW socket on the given interface, e.g. eth0. meant to only be read. 
 			s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
-			try:
-				s.bind((interface, 0))
-			except:
-				print("Failed to bind to interface: " + interface)
-			s.setblocking(False)
+			s.bind((interface, 0))
+			s.setblocking(False) # non-blocking
 			sockets.append(s)
 		return sockets
 
 	def initBuffers(self):
+		# nothing up my sleeves here...
 		buffers = []
 		for interface in self.interfaces :
 			buffers.append(bytearray())
 		return buffers
 
-	def extractFrames(self,frames):
-		slices = []
-		printQueue = []
+	def readSockets(self):
+		for i in range(len(self.sockets)):
+			try: # grab a chunk of data from the socket...
+				data = self.sockets[i].recv(self.chunkSize)
+				if data: self.buffers[i] += data # if there's any data there, add it to the buffer
+			except: # if there's definitely no data to be read. the socket will throw and exception
+				pass
+
+	def extractFrames(self, frames):
+		# places to put stuff...
+		slices = [] # for making the chunk of audio data
+		printQueue = [] # for assembling the data into chunks for printing
 		for n in range(len(self.buffers)):
-			slice = self.buffers[n][:frames]
-			printQueue.append(slice)
-			padded = slice + bytes([127]) * (frames - len(slice))
+			bufferSlice = self.buffers[n][:frames] # grab a slice of data from the buffer
+			printQueue.append(bufferSlice) # whatever we got, add it to the print queue. no need to pad
+			# this makes sure we return as many frames as requested, by padding with audio "0"
+			padded = bufferSlice + bytes([127]) * (frames - len(bufferSlice))
 			slices.append(padded)
-			self.buffers[n] = self.buffers[n][frames:]
-		if len(self.buffers) == 2 :
+			self.buffers[n] = self.buffers[n][frames:] # remove the extracted data from the buffer
+		if len(self.buffers) == 2 : # interleave the slices to form a stereo chunk
 			audioChunk = [ x for y in zip(slices[0], slices[1]) for x in y ]
-		elif len(self.buffers) == 1:
+		elif len(self.buffers) == 1: # marvelous mono
 			audioChunk = slices[0]
 		else:
 			raise Exception("[!] Only supports 1 or two channels/interfaces.")
 		return audioChunk, printQueue
-
-	def stop(self):
-		print('[LISTENER] stop()')
-		self.doRun=False
-		for socket in self.sockets:
-			socket.close()
-		self.join()
 
 	def run(self):
 		print('[LISTENER] run()')
@@ -116,15 +113,24 @@ class Listener(Thread):
 			sleep(0.0001)
 			self.readSockets()
 
+	def stop(self):
+		print('[LISTENER] stop()')
+		self.doRun=False
+		for socket in self.sockets:
+			socket.close()
+		self.join()
+
 #===========================================================================
 # Writer
-# Handles console print operations in an independent thread
+# Handles console print operations in an independent thread. To prevent backlog of print data,
+# The chunkSize should be set to the same value as for the audio device. Right now, this is done
+# in the initialization portion of the script when run as standalone.
 
 class Writer(Thread):
 	def __init__(self, qtyChannels, chunkSize=4096):
-		self.qtyChannels = qtyChannels
+		self.qtyChannels = qtyChannels # we need to know how many streams of data we'll be printing
 		self.doRun = False
-		self.buffers = self.initBuffers()
+		self.buffers = self.initBuffers() # the so called printQueue
 		self.chunkSize = chunkSize
 		Thread.__init__(self)
 
@@ -134,16 +140,47 @@ class Writer(Thread):
 			buffers.append(bytearray())
 		return buffers
 
-	def stop(self):
-		print('[WRITER] stop()')
-		self.doRun=False
-		self.join()
-
 	def queueForPrinting(self, queueData):
+		# since this thread isn't actively grabbing data, it's added here...
 		if len(queueData) != len(self.buffers):
 			raise Exception("[!] len(queueData) != len(self.buffers): ",len(queueData),len(self.buffers))
 		for i in range(len(self.buffers)):
 			self.buffers[i]+=queueData[i]
+
+	def printBuffers(self):
+		# assembles a string to be printed for each stream in the buffers.
+		size = 0
+		for n in range(len(self.buffers)):
+			string = ''
+			# if there's less data in the buffer than the chunkSize, we print only what is there
+			if self.chunkSize > len(self.buffers[n]):
+				size = len(self.buffers[n])
+			else:
+				size = self.chunkSize
+
+			for i in range(size):
+				char=chr(0) # for some reason, setting the character to utf-8 encoded 'null' works best
+				val = self.buffers[n][i] # used to be wrapped in a try/except block... shouldn't be necessary now 
+
+				# if we want to try to print everything, including control characters...
+				if CONTROL_CHARACTERS:
+					TEST = True
+				else:
+					TEST = val > 31
+
+				if TEST:
+					try: # there may be times when the value doesn't map to a valid utf-8 character
+						char = chr(val)
+					except: # just skip it...
+						pass
+				if COLOR: # add the ANSI escape sequence to encode the background color to value of val
+					color = (val+SHIFT+256)%256 # if we want to specify some amount of color shift...
+					string += '\x1b[48;5;%sm%s' % (color, char)
+				else:
+					string+=char
+			if COLOR: string+='\x1b[0m' # terminate the string with the ANSI reset escape sequence
+			print(string, end='') # the thing we came all this way to do
+			self.buffers[n]=self.buffers[n][size:] # remove the printed bit from the buffers
 
 	def run(self):
 		print('[WRITER] run()')
@@ -152,37 +189,10 @@ class Writer(Thread):
 			sleep(0.0001)
 			self.printBuffers()
 
-	def printBuffers(self):
-		size = 0
-		for n in range(len(self.buffers)):
-			string = ''
-			if self.chunkSize > len(self.buffers[n]):
-				size = len(self.buffers[n])
-			else:
-				size = self.chunkSize
-			for i in range(size):
-				try:
-					val = self.buffers[n][i]
-				except:
-					continue
-				char=chr(0)
-				if CONTROL_CHARACTERS:
-					TEST = val != 127
-				else:
-					TEST = val > 31 and val != 127
-				if TEST:
-					try:
-						char = chr(val)
-					except:
-						pass
-				if COLOR:
-					color = (val+SHIFT+256)%256
-					string += '\x1b[48;5;%sm%s' % (color, char)
-				else:
-					string+=char
-			if COLOR: string+='\x1b[0m'
-			print(string, end='')
-			self.buffers[n]=self.buffers[n][size:].copy()
+	def stop(self):
+		print('[WRITER] stop()')
+		self.doRun=False
+		self.join()
 
 #===========================================================================
 # Audifer
@@ -212,64 +222,64 @@ class Audifier(Thread):
 	 		output=True,
 			stream_callback=audify_data_callback)
 
+	def run(self):
+		print('[AUDIFIER] run()')
+		# start the stream
+		print("Starting audio stream...")
+		self.stream.start_stream()
+		if self.stream.is_active(): print("Audio stream is active.")
+
+		while self.doRun:
+			sleep(0.1)
+
 	def stop(self):
 		print('[AUDIFIER] stop()')
 		self.doRun = False
 		self.pa.terminate()
 		self.join()
 
-	def run(self):
-		print('[AUDIFIER] run()')
-		# start the stream
-		try:
-			print("Starting audio stream...")
-			self.stream.start_stream()
-			if self.stream.is_active():
-				print("Audio stream is active.")
-		except Exception as e:
-			print("Unable to start audio stream.",e)
-
-		while self.doRun:
-			sleep(0.1)
-
 #===========================================================================
 # callbak for PyAudio stream instance in Audifier
 
 def audify_data_callback(in_data, frame_count, time_info, status):
-	frames, printQueue = sockets.extractFrames(frame_count)
+	audioChunk, printQueue = sockets.extractFrames(frame_count)
 	if PRINT: writer.queueForPrinting(printQueue)
-	return(bytes(frames), pyaudio.paContinue)
+	return(bytes(audioChunk), pyaudio.paContinue)
 
 #===========================================================================
 # Signal Handler / shutdown procedure
 
 def signalHandler(signum, frame):
+	print('\n[!] Caught termination signal: ', signum)
+	shutdown()
+
+def shutdown():
+	# Just to make sure the console formatting returns to "normal"
 	if PRINT and COLOR:
 		print('\x1b[0m',end='')
-
-	print('\n[!] Caught termination signal: ', signum)
 
 	# Halt the printing presses
 	if PRINT:
 		print('Stopping Writer...')
 		try:
 			writer.stop()
-		except:
-			print("Error stopping Writer.")
+		except Exception as e:
+			print("Error stopping Writer:",e)
 
 	# Shutdown the PyAudio instance
 	print('Stopping audio stream...')
 	try:
 		audifier.stop()
-	except:
-		print("Failed to terminate PyAudio instance.")
+	except Exception as e:
+		print("Failed to terminate PyAudio instance:",e)
 
 	# close the sockets
 	print('Closing Listener...')
 	try:
 		sockets.stop()
-	except:
-		print("Error closing socket.")
+	except Exception as e:
+		print("Error closing socket:",e)
+
 	print('Peace out!')
 	sys.exit(0)
 
@@ -278,7 +288,7 @@ def signalHandler(signum, frame):
 
 def main():
 
-	# interrupt and terminate signal handling
+	# signal handling for termination, etc.
 	signal(SIGINT, signalHandler)
 	signal(SIGTERM, signalHandler)
 	signal(SIGHUP, signalHandler)
@@ -310,13 +320,11 @@ if __name__ == "__main__":
 			exit(1)
 
 		interfaces = []
-
 		ifs = re.split(r'[:;,\.\-_\+|]', args.interface)
-		CHANNELS = len(ifs)
-
 		for i in range(len(ifs)) :
 			interfaces.append(ifs[i])
 
+		CHANNELS = len(interfaces)
 		DEVICE = args.output_device
 		CHUNK = args.chunk_size
 		RATE = args.sample_rate
@@ -333,26 +341,23 @@ if __name__ == "__main__":
 		print("BYTES PER SAMPLE:", WIDTH)
 
 		# open the sockets
-		try:
-			sockets = Listener(interfaces)
-			sockets.start()
-		except Exception as e:
-			print(e)
+		sockets = Listener(interfaces)
+		sockets.start()
 
 		# fire up the printing presses
 		if PRINT:
-			try:
-				writer = Writer(CHANNELS, CHUNK*2)
-				writer.start()
-			except Exception as e:
-				print(e)
-		try:
-			audifier = Audifier(CHANNELS, WIDTH, RATE, CHUNK, DEVICE)
-			audifier.start()
-		except Exception as e:
-			print(e)
+			writer = Writer(CHANNELS, CHUNK*CHANNELS)
+			writer.start()
 
+		# spin up the audio playback engine
+		audifier = Audifier(CHANNELS, WIDTH, RATE, CHUNK, DEVICE)
+		audifier.start()
+
+		# run the main loop
 		main()
 
 	except Exception as e:
 		print('Ooops! Exception caught:',e)
+	finally:
+		shutdown()
+
