@@ -51,7 +51,7 @@ from time import sleep
 # A socket based packet sniffer. Main loop will check sockets for data and grab what's there,
 # storing in a buffer to be extracted later. chunkSize should be a relatively small power of two.
 # Until I can figure out a way to tinker with the sockets and set appropriate permissions, this
-# is what requires running the script as root. 
+# is what requires running the script as root.
 
 class Listener(Thread):
 	def __init__(self, interfaces, chunkSize=4096):
@@ -65,7 +65,7 @@ class Listener(Thread):
 	def initSockets(self):
 		sockets = []
 		for interface in self.interfaces:
-			# etablishes a RAW socket on the given interface, e.g. eth0. meant to only be read. 
+			# etablishes a RAW socket on the given interface, e.g. eth0. meant to only be read.
 			s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
 			s.bind((interface, 0))
 			s.setblocking(False) # non-blocking
@@ -160,7 +160,7 @@ class Writer(Thread):
 
 			for i in range(size):
 				char=chr(0) # for some reason, setting the character to utf-8 encoded 'null' works best
-				val = self.buffers[n][i] # used to be wrapped in a try/except block... shouldn't be necessary now 
+				val = self.buffers[n][i] # used to be wrapped in a try/except block... shouldn't be necessary now
 
 				# if we want to try to print everything, including control characters...
 				if CONTROL_CHARACTERS:
@@ -355,9 +355,5 @@ if __name__ == "__main__":
 
 		# run the main loop
 		main()
-
 	except Exception as e:
 		print('Ooops! Exception caught:',e)
-	finally:
-		shutdown()
-
