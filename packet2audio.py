@@ -170,10 +170,7 @@ class Writer(Thread):
 					TEST = val > 31
 
 				if TEST:
-					try: # there may be times when the value doesn't map to a valid utf-8 character
-						char = chr(val)
-					except: # just skip it...
-						pass
+					char = chr(val)
 				if COLOR: # add the ANSI escape sequence to encode the background color to value of val
 					color = (val+SHIFT+256)%256 # if we want to specify some amount of color shift...
 					string += '\x1b[48;5;%sm%s' % (color, char)
@@ -187,7 +184,7 @@ class Writer(Thread):
 		print('[WRITER] run()')
 		self.doRun=True
 		while self.doRun:
-			sleep(0.0001)
+			sleep(0.001)
 			self.printBuffers()
 
 	def stop(self):
