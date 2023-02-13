@@ -45,6 +45,7 @@ import pyaudio
 import re
 from threading import Thread
 from time import sleep
+import random
 
 #===========================================================================
 # Listener
@@ -195,12 +196,20 @@ class Writer(Thread):
 		self.join()
 
 #===========================================================================
+# callbak for PyAudio stream instance in Audifier
+
+def audify_data_callback(in_data, frame_count, time_info, status):
+	audioChunk, printQueue = sockets.extractFrames(frame_count)
+	if PRINT: writer.queueForPrinting(printQueue)
+	return(bytes(audioChunk), pyaudio.paContinue)
+
+#===========================================================================
 # Audifer
-# Class run in its own thread which handles PyAudio stream instance and operations
+# PyAudio stream instance and operations. By default pyAudio opens the stream in its own thread.
 # Callback mode is used. Documentation for PyAudio states the process
 # for playback runs in a separate thread. Initializing in a subclassed Thread may be redundant.
 
-class Audifier(Thread):
+class Audifier():
 	def __init__(self, qtyChannels, width=1, rate=44100, chunkSize=2048, deviceIndex=0):
 		self.doRun=False
 		self.qtyChannels = qtyChannels
@@ -210,41 +219,44 @@ class Audifier(Thread):
 		self.deviceIndex = deviceIndex
 		self.pa = pyaudio.PyAudio()
 		self.stream = self.initPyAudioStream()
-		Thread.__init__(self)
 
 	def initPyAudioStream(self):
-		return self.pa.open(format=self.pa.get_format_from_width(self.width),
+
+		# for some reason, HDMI output eludes me
+		# print('format:', self.pa.get_format_from_width(self.width))
+		
+		# print(
+		# 	self.pa.is_format_supported(
+		# 		rate = self.rate,
+		# 		output_device=self.deviceIndex,
+		# 		output_channels=self.qtyChannels,
+		# 		output_format=self.pa.get_format_from_width(self.width)
+		# 	)
+		# )
+
+		stream = self.pa.open(
+			format=self.pa.get_format_from_width(self.width),
 			channels=self.qtyChannels,
 	 		rate=self.rate,
 	 		frames_per_buffer=self.chunkSize,
 	 		input=False,
 	 		output_device_index=self.deviceIndex,
 	 		output=True,
-			stream_callback=audify_data_callback)
+			stream_callback=audify_data_callback
+		)
+		return stream
 
-	def run(self):
+	def start(self):
 		print('[AUDIFIER] run()')
-		# start the stream
 		print("Starting audio stream...")
 		self.stream.start_stream()
-		if self.stream.is_active(): print("Audio stream is active.")
-
-		while self.doRun:
-			sleep(0.1)
+		if self.stream.is_active():
+			print("Audio stream is active.")
 
 	def stop(self):
 		print('[AUDIFIER] stop()')
-		self.doRun = False
+		self.stream.close()
 		self.pa.terminate()
-		self.join()
-
-#===========================================================================
-# callbak for PyAudio stream instance in Audifier
-
-def audify_data_callback(in_data, frame_count, time_info, status):
-	audioChunk, printQueue = sockets.extractFrames(frame_count)
-	if PRINT: writer.queueForPrinting(printQueue)
-	return(bytes(audioChunk), pyaudio.paContinue)
 
 #===========================================================================
 # Signal Handler / shutdown procedure
