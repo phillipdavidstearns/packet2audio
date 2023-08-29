@@ -1,5 +1,17 @@
 # packet2audio
 
+```
+NOTE:
+
+This project has morphed into something wonderful, beyond the scope translating network packets into audio. This repository is archived, but the project lives on in a new place (see the link below).
+
+Many thanks to those who followed and starred. Please be sure to follow the rpi-dragon repository for continued development of this idea.
+
+```
+
+* [Follow the Dragon](https://github.com/phillipdavidstearns/rpi-dragon)
+
+---
 
 A minimal python script to hoover up network traffic and spit it out the audio interface. Managing of Sockets, Printing and Audification are handled in separate threads.
 
